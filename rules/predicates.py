@@ -328,8 +328,21 @@ def is_group_member(*groups) -> Callable[..., Any]:
     def fn(user) -> bool:
         if not hasattr(user, "groups"):
             return False  # swapped user model, doesn't support groups
-        if not hasattr(user, "_group_names_cache"):  # pragma: no cover
-            user._group_names_cache = set(user.groups.values_list("name", flat=True))
-        return set(groups).issubset(user._group_names_cache)
+        # The group names are cached only for the duration of the current
+        # ``test()`` invocation (a thread-local, per-context store). They are
+        # never attached to the user instance, so membership changes in the
+        # database are reflected on the next evaluation and no stale data can
+        # leak between rules, invocations or threads. Within a single
+        # invocation the freshly fetched names are reused.
+        context = fn.context
+        cache_key = id(user)
+        if context is not None:
+            group_names = context.get("group_names", {}).get(cache_key)
+            if group_names is None:
+                group_names = set(user.groups.values_list("name", flat=True))
+                context.setdefault("group_names", {})[cache_key] = group_names
+        else:
+            group_names = set(user.groups.values_list("name", flat=True))
+        return set(groups).issubset(group_names)
 
     return fn
